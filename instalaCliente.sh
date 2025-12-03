@@ -1,121 +1,108 @@
-<#
-.SYNOPSIS
-    Script de instalación y configuración desatendida de Veyon Service (Cliente/Alumno).
-.DESCRIPTION
-    1. Descarga el instalador oficial de Veyon.
-    2. Instala Veyon en modo silencioso (solo servicio, sin consola Master).
-    3. Descarga la Clave Pública desde una URL especificada.
-    4. Importa la clave y configura Veyon para usar autenticación por clave.
-    5. Configura el Firewall de Windows.
-.NOTES
-    Debes ejecutar este script como ADMINISTRADOR.
-#>
+#!/bin/bash
 
-# -----------------------------------------------------------
-# ⚙️ CONFIGURACIÓN - EDITA ESTA SECCIÓN
-# -----------------------------------------------------------
+# ==============================================================================
+# SCRIPT DE INSTALACIÓN DESATENDIDA DE VEYON SERVICE (CLIENTE) PARA LINUX MINT
+# ==============================================================================
+# Descripción:
+# 1. Agrega el repositorio oficial (PPA) de Veyon para tener la última versión.
+# 2. Instala Veyon.
+# 3. Descarga la clave pública desde una URL.
+# 4. Configura Veyon para autenticación por clave y ajusta el firewall (UFW).
+# ==============================================================================
 
-# Nombre de tu par de claves (Debe coincidir con el nombre que diste al crearlas en el Master)
-$NombreClave = "Lab_Aula_Informatica" 
+# --- CONFIGURACIÓN (EDITA ESTO) ---
+NOMBRE_CLAVE="Lab_Aula_Informatica"
+URL_CLAVE_PUBLICA="http://tu-servidor-o-web.com/public_key.pem"
+# ----------------------------------
 
-# URL directa donde está alojada tu clave PÚBLICA (.pem)
-$UrlClavePublica = "http://tu-servidor-o-web.com/public_key.pem"
+# Definición de colores para la salida
+VERDE='\033[0;32m'
+AZUL='\033[0;36m'
+ROJO='\033[0;31m'
+AMARILLO='\033[1;33m'
+NC='\033[0m' # No Color
 
-# URL del instalador de Veyon (Si lo dejas así, descarga la última versión estable)
-$UrlInstaller = "https://github.com/veyon/veyon/releases/download/v4.9.0/veyon-4.9.0.0-win64-setup.exe"
+echo -e "${AZUL}======================================================${NC}"
+echo -e "${AZUL}   INICIANDO INSTALACIÓN DE VEYON (CLIENTE LINUX)    ${NC}"
+echo -e "${AZUL}======================================================${NC}"
 
-# -----------------------------------------------------------
-# 🚀 INICIO DEL SCRIPT
-# -----------------------------------------------------------
+# 1. Comprobar si somos root (Administrador)
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${ROJO}[ERROR] Por favor, ejecuta este script como root (sudo).${NC}"
+  exit 1
+fi
 
-Write-Host "Iniciando despliegue de Veyon Service..." -ForegroundColor Cyan
+# 2. Agregar repositorio oficial (PPA) y actualizar
+# Esto asegura que no instalamos una versión obsoleta del repositorio de Mint por defecto
+echo -e "${AMARILLO}[INFO] Agregando repositorio oficial de Veyon...${NC}"
+add-apt-repository ppa:veyon/stable -y > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${VERDE}[OK] Repositorio agregado.${NC}"
+else
+    echo -e "${ROJO}[ERROR] Falló al agregar el repositorio.${NC}"
+    exit 1
+fi
 
-# 1. Verificación de permisos de Administrador
-if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Warning "Este script necesita ejecutarse como Administrador."
-    Break
-}
+echo -e "${AMARILLO}[INFO] Actualizando lista de paquetes...${NC}"
+apt-get update -qq
 
-# Directorios temporales
-$TempDir = $env:TEMP
-$InstallerPath = "$TempDir\veyon-setup.exe"
-$KeyPath = "$TempDir\public_key.pem"
+# 3. Instalar Veyon
+echo -e "${AMARILLO}[INFO] Instalando Veyon Service...${NC}"
+apt-get install veyon -y -qq
+if [ $? -eq 0 ]; then
+    echo -e "${VERDE}[OK] Veyon instalado correctamente.${NC}"
+else
+    echo -e "${ROJO}[ERROR] Falló la instalación de Veyon.${NC}"
+    exit 1
+fi
 
-# 2. Descargar Instalador
-try {
-    Write-Host "Descargando Veyon desde $UrlInstaller..." -ForegroundColor Yellow
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $UrlInstaller -OutFile $InstallerPath
-    Write-Host "Instalador descargado correctamente." -ForegroundColor Green
-}
-catch {
-    Write-Error "Error al descargar el instalador. Verifica tu conexión o la URL."
-    Break
-}
+# 4. Detener el servicio momentáneamente para configurar
+systemctl stop veyon.service
 
-# 3. Instalar Veyon (Modo Silencioso y Sin Master)
-# /S = Silencioso
-# /NoMaster = No instala la consola del profesor (ahorra espacio y evita confusiones)
-# /NoStart = No iniciar todavía para poder configurar
-Write-Host "Instalando Veyon (esto puede tardar unos minutos)..." -ForegroundColor Yellow
-Start-Process -FilePath $InstallerPath -ArgumentList "/S", "/NoMaster", "/NoStart" -Wait -NoNewWindow
+# 5. Descargar la Clave Pública
+echo -e "${AMARILLO}[INFO] Descargando clave pública desde $URL_CLAVE_PUBLICA...${NC}"
+wget -q -O /tmp/public_key.pem "$URL_CLAVE_PUBLICA"
 
-# Verificar si se instaló correctamente buscando el CLI
-$VeyonCliPath = "C:\Program Files\Veyon\veyon-cli.exe"
-if (-not (Test-Path $VeyonCliPath)) {
-    Write-Error "No se encontró veyon-cli.exe. La instalación pudo haber fallado."
-    Break
-}
+if [ -f /tmp/public_key.pem ]; then
+    echo -e "${VERDE}[OK] Clave descargada.${NC}"
+else
+    echo -e "${ROJO}[ERROR] No se pudo descargar la clave. Verifica la URL.${NC}"
+    exit 1
+fi
 
-# 4. Descargar la Clave Pública
-try {
-    Write-Host "Descargando clave pública..." -ForegroundColor Yellow
-    Invoke-WebRequest -Uri $UrlClavePublica -OutFile $KeyPath
-    Write-Host "Clave descargada." -ForegroundColor Green
-}
-catch {
-    Write-Error "Error al descargar la clave pública. Verifica la URL: $UrlClavePublica"
-    Break
-}
+# 6. Configurar Veyon (veyon-cli)
+echo -e "${AMARILLO}[INFO] Aplicando configuración...${NC}"
 
-# 5. Configuración de Veyon mediante CLI
-Write-Host "Configurando Veyon..." -ForegroundColor Yellow
+# Borrar claves viejas si existen para evitar conflictos
+veyon-cli authkeys delete "$NOMBRE_CLAVE" > /dev/null 2>&1
 
-# Eliminar claves anteriores si existen para evitar conflictos (opcional)
-& $VeyonCliPath authkeys delete $NombreClave *>$null
+# Importar la nueva clave
+veyon-cli authkeys import "$NOMBRE_CLAVE" /tmp/public_key.pem
+if [ $? -eq 0 ]; then
+    echo -e "${VERDE}[OK] Clave '$NOMBRE_CLAVE' importada.${NC}"
+else
+    echo -e "${ROJO}[ERROR] Falló la importación de la clave.${NC}"
+fi
 
-# Importar la nueva clave pública
-& $VeyonCliPath authkeys import $NombreClave $KeyPath
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Clave '$NombreClave' importada exitosamente." -ForegroundColor Green
-} else {
-    Write-Error "Fallo al importar la clave."
-}
+# Configurar método de autenticación a KeyFile (Archivo de clave)
+veyon-cli config set Authentication/Method KeyFile
 
-# Configurar el método de autenticación para usar Archivo de Clave (KeyFile)
-# Esto es CRÍTICO. Si no se pone, usa LogonAuthentication por defecto.
-& $VeyonCliPath config set Authentication/Method KeyFile
+# 7. Configurar Firewall (UFW)
+# Veyon necesita el puerto 11100 TCP abierto
+if command -v ufw > /dev/null; then
+    echo -e "${AMARILLO}[INFO] Configurando Firewall (UFW)...${NC}"
+    ufw allow 11100/tcp comment 'Veyon Service' > /dev/null
+    echo -e "${VERDE}[OK] Puerto 11100 abierto en UFW.${NC}"
+else
+    echo -e "${AMARILLO}[AVISO] UFW no está instalado. Asegúrate de abrir el puerto 11100 manualmente si usas otro firewall.${NC}"
+fi
 
-# Asegurar que el servicio arranque automáticamente
-Set-Service -Name "VeyonService" -StartupType Automatic
+# 8. Limpieza y Reinicio del servicio
+rm /tmp/public_key.pem
+echo -e "${AMARILLO}[INFO] Iniciando servicio Veyon...${NC}"
+systemctl enable veyon.service > /dev/null 2>&1
+systemctl start veyon.service
 
-# 6. Reglas de Firewall (Importante para que el Master vea al Alumno)
-Write-Host "Abriendo puertos en Firewall..." -ForegroundColor Yellow
-# Veyon usa el puerto 11100 por defecto para el servicio
-New-NetFirewallRule -DisplayName "Veyon Service" -Direction Inbound -LocalPort 11100 -Protocol TCP -Action Allow -Program "C:\Program Files\Veyon\veyon-service.exe" -ErrorAction SilentlyContinue | Out-Null
-
-# 7. Finalización y Limpieza
-Write-Host "Iniciando servicio Veyon..." -ForegroundColor Yellow
-& $VeyonCliPath service start
-
-# Borrar archivos temporales
-Remove-Item $InstallerPath -Force -ErrorAction SilentlyContinue
-Remove-Item $KeyPath -Force -ErrorAction SilentlyContinue
-
-Write-Host "`n-------------------------------------------------------" -ForegroundColor Cyan
-Write-Host "  ¡INSTALACIÓN COMPLETADA CON ÉXITO! " -ForegroundColor Green
-Write-Host "  El ordenador está listo para ser supervisado."
-Write-Host "-------------------------------------------------------" -ForegroundColor Cyan
-
-# Pausa para que leas el resultado si lo lanzaste con doble clic
-Read-Host "Presiona Enter para salir"
+echo -e "${AZUL}======================================================${NC}"
+echo -e "${VERDE}   ¡INSTALACIÓN COMPLETADA EXITOSAMENTE!             ${NC}"
+echo -e "${AZUL}======================================================${NC}"
